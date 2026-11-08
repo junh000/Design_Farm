@@ -3796,3 +3796,20 @@ svg {
   .header .account-button { font-size: 10px; }
   .header-actions .button { padding-inline: 8px; }
 }
+/* Registration review keeps the form mounted while the author checks the artwork. */
+.registration-review { padding: 24px; }
+.artwork-preview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; margin: 24px 0; }
+.preview-media { background: #eae7df; display: grid; place-items: center; min-width: 0; }
+.preview-media img { width: 100%; height: auto; max-height: 420px; object-fit: contain; }
+.preview-information { overflow-wrap: anywhere; }
+.preview-information p { white-space: pre-wrap; margin-top: 16px; }
+.preview-model-section { grid-column: 1 / -1; }
+.preview-model { height: 350px; background: #eae7df; width: 100%; }
+.preview-model canvas { display: block; touch-action: none; }
+.preview-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+@media (max-width: 650px) {
+  .registration-review { padding: 16px; }
+  .artwork-preview { grid-template-columns: minmax(0, 1fr); }
+  .preview-model { height: 280px; }
+  .preview-actions .button { width: 100%; }
+}

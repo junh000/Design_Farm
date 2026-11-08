@@ -34,6 +34,24 @@ def model_bytes(external=False):
 
 
 class GalleryTests(unittest.TestCase):
+    def test_publication_retry_creates_one_artwork_and_preserves_request_content(self):
+        artist, _ = self.signup()
+        image = self.upload(artist)
+        image_url = '/api/images/' + image
+        self.assertEqual(self.client.get(image_url).status_code, 404)
+        payload = {'title': '최종 미리보기', 'category': '회화', 'material': '캔버스', 'story': '수정 후 공개',
+                   'image_id': image, 'width': 30, 'height': 40, 'depth': 0, 'space': '거실',
+                   'placement': '벽', 'mounting': 'wall', 'start': 10000, 'duration': 3,
+                   'request_key': str(uuid.uuid4())}
+        before = len(self.client.get('/api/gallery').json()['artworks'])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: artist.post('/api/artworks', json=payload), range(2)))
+        self.assertTrue(all(result.status_code == 200 for result in results))
+        self.assertEqual(results[0].json()['id'], results[1].json()['id'])
+        self.assertEqual(len(self.client.get('/api/gallery').json()['artworks']), before + 1)
+        self.assertEqual(self.client.get(image_url).status_code, 200)
+        self.assertEqual(artist.post('/api/artworks', json={**payload, 'title': '다른 내용'}).status_code, 409)
+
     def test_model_upload_is_private_until_published_and_owner_only(self):
         artist, _ = self.signup()
         other, _ = self.signup('other@example.test')

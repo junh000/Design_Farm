@@ -220,7 +220,7 @@ export function fitToDimensions(
   return wrapper;
 }
 
-export async function createArtModel(art: Art) {
+export async function createArtModel(art: Pick<Art, "id" | "image" | "dimensions" | "model_url">) {
   const { width, height, depth } = art.dimensions;
   let group: T.Group;
   if (art.model_url) {
