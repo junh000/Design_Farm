@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "object_id": "replace-with-real-artwork-id",
+  "source_kind": "real_photographs",
+  "same_object_confirmed": false,
+  "rights_confirmed": false,
+  "capture_notes": "촬영 날짜, 조명, 배경, 렌즈, 작품의 반사/투명 재질과 촬영 중 움직임 여부를 기록하세요.",
+  "dimensions_cm": {"width": null, "height": null, "depth": null},
+  "inputs": [
+    {"view": "front", "path": "photos/front.jpg"},
+    {"view": "right", "path": "photos/right.jpg"},
+    {"view": "back", "path": "photos/back.jpg"},
+    {"view": "left", "path": "photos/left.jpg"}
+  ],
+  "holdouts": [
+    {"view": "front-right", "path": "photos/front-right.jpg"},
+    {"view": "back-right", "path": "photos/back-right.jpg"},
+    {"view": "back-left", "path": "photos/back-left.jpg"},
+    {"view": "front-left", "path": "photos/front-left.jpg"}
+  ]
+}
