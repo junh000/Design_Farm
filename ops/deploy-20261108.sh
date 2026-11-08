@@ -8,6 +8,14 @@ BACKUP=$BASE/backups/20261108-4571c7f
 export PATH=$BASE/tools/node-v24.21.0-linux-x64/bin:$PATH
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 test "$OLD" = /opt/design-farm/releases/20261013
+if [ "${1:-}" = --activate-only ]; then
+  test "$(cat "$REL/DEPLOYED_COMMIT")" = 4571c7ff0d72b7e6db6ccac2791b9c4cf60a54b5
+  test -s "$REL/frontend/.next/BUILD_ID"
+  test -x "$REL/backend/.venv/bin/python"
+  test "$(cat "$BACKUP/previous-release.txt")" = "$OLD"
+  caddy validate --config "$BACKUP/Caddyfile.candidate" --adapter caddyfile
+else
+test "$#" = 0
 test ! -e "$REL"
 mkdir -p "$REL" "$BACKUP"
 chmod 700 "$BACKUP"
@@ -60,24 +68,32 @@ runuser -u designfarm -- env PATH="$PATH" npx --yes pnpm@10.20.0 typecheck
 runuser -u designfarm -- env PATH="$PATH" node --test tests/spatial-dimensions.test.mjs
 runuser -u designfarm -- env PATH="$PATH" NODE_OPTIONS=--max-old-space-size=2048 DESIGN_FARM_PUBLIC_DEMO=1 npx --yes pnpm@10.20.0 build
 printf '%s\n' 4571c7ff0d72b7e6db6ccac2791b9c4cf60a54b5 > "$REL/DEPLOYED_COMMIT"
+fi
 echo BUILD_AND_TESTS_PASSED
+ATTEMPT=$BACKUP/activation-$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -m 700 "$ATTEMPT"
 ACTIVATING=1
 rollback() {
   code=$?
   if [ "$code" -ne 0 ] && [ "${ACTIVATING:-0}" = 1 ]; then
+    set +e
     ln -sfn "$OLD" "$BASE/current.rollback"
     mv -Tf "$BASE/current.rollback" "$BASE/current"
     cp "$BACKUP/Caddyfile.before" /etc/caddy/Caddyfile
     systemctl restart design-farm-api design-farm-web
-    systemctl reload caddy
-    echo ROLLED_BACK_TO_PREVIOUS_RELEASE
+    systemctl restart caddy
+    if systemctl is-active --quiet design-farm-api design-farm-web caddy; then
+      echo ROLLED_BACK_TO_PREVIOUS_RELEASE
+    else
+      echo ROLLBACK_REQUIRES_ATTENTION
+    fi
   fi
   exit "$code"
 }
 trap rollback EXIT
 systemctl stop design-farm-api design-farm-web
-tar -czf "$BACKUP/data-before.tgz" -C /var/lib design-farm
-python3 - "$BACKUP" <<'PY'
+tar -czf "$ATTEMPT/data-before.tgz" -C /var/lib design-farm
+python3 - "$ATTEMPT" <<'PY'
 import json, sqlite3, sys
 from pathlib import Path
 c=sqlite3.connect('file:/var/lib/design-farm/gallery.sqlite3?mode=ro',uri=True)
@@ -89,8 +105,9 @@ ln -s "$REL" "$BASE/current.next"
 mv -Tf "$BASE/current.next" "$BASE/current"
 cp "$BACKUP/Caddyfile.candidate" /etc/caddy/Caddyfile
 systemctl start design-farm-api design-farm-web
-systemctl reload caddy
-python3 - "$BACKUP" <<'PY'
+# The existing Caddy instance deliberately has its admin API disabled.
+systemctl restart caddy
+python3 - "$ATTEMPT" <<'PY'
 import json, sqlite3, sys, time, urllib.request
 from pathlib import Path
 for attempt in range(30):
