@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from models import MAX_MODEL_BYTES, validate_glb
+from model_generation import GenerationService, configuration as generation_configuration, initialize_schema as initialize_generation_schema
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('DESIGN_FARM_DATA', ROOT / 'data'))
@@ -124,6 +125,7 @@ def initialize():
           status TEXT NOT NULL DEFAULT 'pending',created INTEGER NOT NULL,request_key TEXT NOT NULL,UNIQUE(sender_id,request_key));
         CREATE INDEX IF NOT EXISTS bids_work ON bids(artwork_id,id);
         ''')
+        initialize_generation_schema(c)
         if c.execute('SELECT COUNT(*) FROM users').fetchone()[0]:
             seed_additional_artworks(c)
             return
@@ -192,15 +194,22 @@ def serialize_art(c, row, user_id=None):
 @asynccontextmanager
 async def lifespan(app):
     initialize()
+    generations.recover()
     async def expire():
         while True:
             await asyncio.sleep(3)
             await asyncio.to_thread(expire_once)
     task=asyncio.create_task(expire())
+    generation_task=asyncio.create_task(generations.run())
     yield
     task.cancel()
+    generation_task.cancel()
     try:
         await task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await generation_task
     except asyncio.CancelledError:
         pass
 
@@ -211,6 +220,7 @@ def expire_once():
 
 
 app=FastAPI(title='Design Farm — Local Gallery',lifespan=lifespan)
+generations=GenerationService(database, lambda: DATA)
 
 
 @app.middleware('http')
@@ -229,6 +239,75 @@ async def security_headers(request:Request,call_next):
 
 class Input(BaseModel):
     model_config=ConfigDict(str_strip_whitespace=True,extra='forbid')
+
+
+class GenerationRequest(Input):
+    request_key: str = Field(min_length=36, max_length=36)
+    consent: bool = Field(strict=True)
+
+    @field_validator('request_key')
+    @classmethod
+    def valid_request_key(cls, value):
+        return str(uuid.UUID(value))
+
+    @field_validator('consent')
+    @classmethod
+    def require_consent(cls, value):
+        if not value:
+            raise ValueError('외부 생성 서비스로 사진을 보내고 이용료가 발생할 수 있음에 동의해 주세요.')
+        return value
+
+
+class GenerationCreate(GenerationRequest):
+    source_image_ids: list[str] = Field(min_length=4, max_length=4)
+
+    @field_validator('source_image_ids')
+    @classmethod
+    def valid_source_ids(cls, values):
+        values = [str(uuid.UUID(value)) for value in values]
+        if len(set(values)) != 4:
+            raise ValueError('서로 다른 방향의 사진 4장을 선택해 주세요.')
+        return values
+
+
+def generation_owner(request):
+    with database() as c:
+        return current_user(request, c)['id']
+
+
+@app.get('/api/model-generation/config')
+def generation_config():
+    return generation_configuration()
+
+
+@app.post('/api/model-generations')
+def create_generation(body: GenerationCreate, request: Request):
+    return generations.create(generation_owner(request), body.source_image_ids, body.request_key)
+
+
+@app.get('/api/model-generations')
+def list_generations(request: Request):
+    return generations.list(generation_owner(request))
+
+
+@app.get('/api/model-generations/{ident}')
+def get_generation(ident: str, request: Request):
+    return generations.get(ident, generation_owner(request))
+
+
+@app.post('/api/model-generations/{ident}/retry')
+def retry_generation(ident: str, body: GenerationRequest, request: Request):
+    return generations.retry(ident, generation_owner(request), body.request_key)
+
+
+@app.post('/api/model-generations/{ident}/adopt')
+def adopt_generation(ident: str, request: Request):
+    return generations.adopt(ident, generation_owner(request))
+
+
+@app.get('/api/model-generations/{ident}/model')
+def generation_model(ident: str, request: Request):
+    return FileResponse(generations.candidate(ident, generation_owner(request)), media_type='model/gltf-binary')
 
 
 class Login(Input):
