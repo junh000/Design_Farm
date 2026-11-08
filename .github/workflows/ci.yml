@@ -31,6 +31,9 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.lock.txt
       - run: python -m pip install -r requirements.lock.txt
+      - name: Deployment script syntax
+        working-directory: .
+        run: bash -n ops/deploy-release.sh
       - run: python -m unittest discover -s . -p "test_*.py" -v
       - name: Offline multi-view experiment checks
         working-directory: .
