@@ -32,6 +32,7 @@ import SpaceDemo from "./SpaceDemo";
 import Modal from "./Modal";
 import ArtworkImage from "./ArtworkImage";
 import ArtworkPreview, { type PreviewArt } from "./ArtworkPreview";
+import PhotoModelPanel from "./PhotoModelPanel";
 import {
   api,
   Art,
@@ -1770,6 +1771,7 @@ function RegisterForm({
     name: string;
   } | null>(null);
   const [modelUploading, setModelUploading] = useState(false);
+  const [generationBusy, setGenerationBusy] = useState(false);
   const [image, setImage] = useState<{ id: string; url: string } | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -1818,7 +1820,7 @@ function RegisterForm({
   }
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (busy || uploading || modelUploading) return;
+    if (busy || uploading || modelUploading || generationBusy) return;
     if (!image) {
       setError("작품 이미지를 먼저 업로드해 주세요.");
       return;
@@ -1930,7 +1932,7 @@ function RegisterForm({
                 type="file"
                 accept=".glb"
                 aria-label="3D 파일 첨부"
-                disabled={modelUploading || busy}
+                disabled={modelUploading || busy || generationBusy}
                 onChange={(e) => {
                   void uploadModel(e.target.files?.[0]);
                   e.target.value = "";
@@ -1956,6 +1958,14 @@ function RegisterForm({
               </div>
             )}
           </div>
+        )}
+        {category !== "디지털" && (
+          <PhotoModelPanel
+            key={user.id}
+            disabled={busy || uploading || modelUploading || !!preview}
+            onAdopt={setModel}
+            onBusyChange={setGenerationBusy}
+          />
         )}
         <div className="form-section">
           <span>01</span>
@@ -2124,7 +2134,7 @@ function RegisterForm({
         )}
         <button
           className="button dark full"
-          disabled={busy || uploading || modelUploading}
+          disabled={busy || uploading || modelUploading || generationBusy}
         >
           등록 전 미리보기
           <ArrowUpRight size={18} />
