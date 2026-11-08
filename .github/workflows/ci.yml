@@ -58,5 +58,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec next typegen
       - run: pnpm typecheck
-      - run: node --test tests/spatial-dimensions.test.mjs
+      - run: node --test tests/*.test.mjs
       - run: pnpm build
