@@ -3645,6 +3645,50 @@ svg {
 .xr-actions .button {
   min-width: 130px;
 }
+.xr-action-stack {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 440px);
+  max-height: calc(100dvh - 180px);
+  overflow-y: auto;
+  pointer-events: auto;
+}
+.xr-action-stack .xr-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.xr-adjustments {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #d0d5c8;
+  border-radius: 3px;
+  background: #faf9f2f2;
+  color: #28352a;
+  font-size: 12px;
+}
+.xr-adjustments legend {
+  background: #faf9f2;
+  padding: 2px 6px;
+}
+.xr-adjustments p {
+  margin-bottom: 10px;
+}
+.xr-adjustments > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.xr-adjustments button {
+  min-height: 44px;
+  border: 1px solid #bdc5b8;
+  border-radius: 3px;
+  background: #fff;
+  color: inherit;
+  font-size: 12px;
+}
+.xr-adjustments button:disabled {
+  opacity: 0.45;
+}
 @media (max-width: 1100px) {
   .brand .brand-word {
     font-size: 24px;

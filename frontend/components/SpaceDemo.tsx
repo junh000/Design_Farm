@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import ArtworkImage from "./ArtworkImage";
 import type { Art } from "./types";
+import type { PlacementPose } from "./ar-placement";
 
 type Settings = {
   x: number;
@@ -33,6 +34,8 @@ type SceneApi = {
   startAR: () => Promise<void>;
   endAR: () => void;
   place: () => void;
+  adjustWall: (x: number, y: number) => void;
+  resetWallOffset: () => void;
 };
 const modelIds = new Set(["sculpture", "ceramic", "bronze", "porcelain"]);
 
@@ -49,6 +52,8 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
     [xrBusy, setXrBusy] = useState(false);
   const [xrMessage, setXrMessage] = useState(""),
     [canPlace, setCanPlace] = useState(false);
+  const [xrPlaced, setXrPlaced] = useState(false);
+  const [xrOffset, setXrOffset] = useState({ x: 0, y: 0 });
   const host = useRef<HTMLDivElement>(null),
     overlay = useRef<HTMLDivElement>(null);
   const sceneApi = useRef<SceneApi | null>(null);
@@ -101,11 +106,13 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
         { OrbitControls },
         { RoomEnvironment },
         { createArtModel, disposeObject },
+        { placementFromHit, positionWithWallOffset, isFreshHit, MAX_WALL_OFFSET_METRES },
       ] = await Promise.all([
         import("three"),
         import("three/addons/controls/OrbitControls.js"),
         import("three/addons/environments/RoomEnvironment.js"),
         import("./art-models"),
+        import("./ar-placement"),
       ]);
       if (cancelled) return;
       const renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
@@ -214,7 +221,7 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
       let model: InstanceType<typeof T.Group> | null = null;
       const reticle = new T.Mesh(
         new T.RingGeometry(0.065, 0.085, 48).rotateX(-Math.PI / 2),
-        new T.MeshBasicMaterial({ color: 0xeacdaa }),
+        new T.MeshBasicMaterial({ color: 0xeacdaa, side: T.DoubleSide }),
       );
       reticle.matrixAutoUpdate = false;
       reticle.visible = false;
@@ -223,6 +230,37 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
         hitSource: XRHitTestSource | null = null;
       let visible = true,
         surfaceFound = false;
+      let candidate: PlacementPose | null = null,
+        placed: PlacementPose | null = null,
+        hitTime = -Infinity,
+        scanStarted = 0,
+        statusMessage = "";
+      let wallOffset = { x: 0, y: 0 };
+      let xrReference: XRReferenceSpace | null = null;
+      const message = (text: string) => {
+        if (statusMessage === text || cancelled) return;
+        statusMessage = text;
+        setXrMessage(text);
+      };
+      const invalidateHit = () => {
+        candidate = null;
+        hitTime = -Infinity;
+        surfaceFound = false;
+        reticle.visible = false;
+        if (!cancelled) setCanPlace(false);
+      };
+      const onVisibilityChange = () => {
+        invalidateHit();
+        scanStarted = performance.now();
+        message("추적이 잠시 중단됐어요. 주변을 천천히 비춰 표면을 다시 확인해 주세요.");
+      };
+      const onReferenceReset = () => {
+        invalidateHit();
+        placed = null;
+        pivot.visible = false;
+        if (!cancelled) setXrPlaced(false);
+        message("공간 기준이 바뀌었어요. 표면을 다시 찾아 작품을 배치해 주세요.");
+      };
       const size = () => {
         if (renderer.xr.isPresenting) return;
         const w = el!.clientWidth,
@@ -260,10 +298,18 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
         );
       };
       const restore = () => {
+        session?.removeEventListener("visibilitychange", onVisibilityChange);
+        xrReference?.removeEventListener("reset", onReferenceReset);
+        xrReference = null;
         hitSource?.cancel();
         hitSource = null;
         session = null;
         surfaceFound = false;
+        candidate = null;
+        placed = null;
+        hitTime = -Infinity;
+        statusMessage = "";
+        wallOffset = { x: 0, y: 0 };
         room.visible = true;
         pivot.visible = true;
         reticle.visible = false;
@@ -277,32 +323,31 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
           setXrActive(false);
           setXrBusy(false);
           setCanPlace(false);
+          setXrPlaced(false);
+          setXrOffset({ x: 0, y: 0 });
           setXrMessage("");
         }
       };
       const place = () => {
-        if (!session || !reticle.visible) return;
-        pivot.position.setFromMatrixPosition(reticle.matrix);
-        const viewerPosition = new T.Vector3().setFromMatrixPosition(
-          renderer.xr.getCamera().matrixWorld,
-        );
-        pivot.rotation.set(
-          0,
-          Math.atan2(
-            viewerPosition.x - pivot.position.x,
-            viewerPosition.z - pivot.position.z,
-          ),
-          0,
-        );
+        if (!session || !candidate || !reticle.visible ||
+            !isFreshHit(hitTime, performance.now(), session.visibilityState === "visible")) return;
+        placed = candidate;
+        wallOffset = { x: 0, y: 0 };
+        pivot.position.copy(placed.position);
+        pivot.quaternion.copy(placed.quaternion);
+        pivot.scale.setScalar(1);
         pivot.visible = true;
-        if (!cancelled)
-          setXrMessage(
-            "작품을 놓았어요. 다른 자리를 비춘 뒤 다시 배치할 수 있어요.",
-          );
+        if (!cancelled) {
+          setXrPlaced(true);
+          setXrOffset({ x: 0, y: 0 });
+          message(wallArt
+            ? "벽에 걸었어요. 높이·좌우를 조절하거나 다른 벽을 비춰 다시 배치하세요."
+            : "작품을 놓았어요. 다른 바닥이나 테이블을 비춰 다시 배치하세요.");
+        }
       };
       // Prevent the DOM controls from also placing the object in the XR scene.
       const preventSelect = (e: Event) => {
-        if (e.target instanceof Element && e.target.closest("button")) e.preventDefault();
+        if (e.target instanceof Element && e.target.closest("button, .xr-action-stack")) e.preventDefault();
       };
       const overlayEl = overlay.current;
       overlayEl?.addEventListener("beforexrselect", preventSelect);
@@ -311,6 +356,8 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
       scene.add(controller);
       cleanup = () => {
         session?.removeEventListener("end", restore);
+        session?.removeEventListener("visibilitychange", onVisibilityChange);
+        xrReference?.removeEventListener("reset", onReferenceReset);
         if (session) void session.end().catch(() => {});
         hitSource?.cancel();
         observer.disconnect();
@@ -348,6 +395,21 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
           controls.update();
         },
         place,
+        adjustWall: (x, y) => {
+          if (!session || !wallArt || !placed || !candidate ||
+              !isFreshHit(hitTime, performance.now(), session.visibilityState === "visible")) return;
+          const clamp = (value: number) => Math.max(-MAX_WALL_OFFSET_METRES, Math.min(MAX_WALL_OFFSET_METRES, value));
+          wallOffset = { x: clamp(wallOffset.x + x), y: clamp(wallOffset.y + y) };
+          pivot.position.copy(positionWithWallOffset(placed, wallOffset.x, wallOffset.y));
+          setXrOffset({ x: Math.round(wallOffset.x * 100), y: Math.round(wallOffset.y * 100) });
+        },
+        resetWallOffset: () => {
+          if (!session || !wallArt || !placed || !candidate ||
+              !isFreshHit(hitTime, performance.now(), session.visibilityState === "visible")) return;
+          wallOffset = { x: 0, y: 0 };
+          pivot.position.copy(placed.position);
+          setXrOffset({ x: 0, y: 0 });
+        },
         endAR: () => {
           void session?.end();
         },
@@ -365,29 +427,43 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
             }
             session = requested;
             session.addEventListener("end", restore);
+            session.addEventListener("visibilitychange", onVisibilityChange);
             const viewer = await session.requestReferenceSpace("viewer");
+            if (cancelled || session !== requested) {
+              await requested.end().catch(() => {});
+              return;
+            }
             if (!session.requestHitTestSource)
               throw new Error(
                 "이 브라우저에서는 표면 인식을 사용할 수 없어요.",
               );
-            hitSource =
-              (await session.requestHitTestSource({ space: viewer })) || null;
+            const requestedSource =
+              (await session.requestHitTestSource({ space: viewer, entityTypes: ["plane"] })) || null;
+            if (cancelled || session !== requested) {
+              requestedSource?.cancel();
+              await requested.end().catch(() => {});
+              return;
+            }
+            hitSource = requestedSource;
             if (!hitSource) throw new Error("표면 인식을 시작할 수 없어요.");
             await renderer.xr.setSession(session);
-            if (cancelled) {
-              await requested.end();
+            if (cancelled || session !== requested) {
+              await requested.end().catch(() => {});
               return;
             }
             room.visible = false;
+            xrReference = renderer.xr.getReferenceSpace();
+            xrReference?.addEventListener("reset", onReferenceReset);
             pivot.visible = false;
             pivot.scale.setScalar(1);
             reticle.visible = false;
             scene.background = null;
             controls.enabled = false;
+            scanStarted = performance.now();
             setXrActive(true);
-            setXrMessage(
-              "카메라를 천천히 움직여 바닥이나 테이블의 평평한 면을 찾아주세요.",
-            );
+            message(wallArt
+              ? "카메라를 천천히 움직여 세로 벽을 찾아주세요. 표식이 작품의 중심이 됩니다."
+              : "카메라를 천천히 움직여 바닥이나 테이블의 평평한 면을 찾아주세요.");
           } catch (e) {
             if (requested) {
               await requested.end().catch(() => {});
@@ -401,20 +477,38 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
         if (cancelled) return;
         if (frame && session && hitSource) {
           const reference = renderer.xr.getReferenceSpace();
-          const hits = frame.getHitTestResults(hitSource);
-          const pose = reference && hits[0]?.getPose(reference);
-          // Only accept horizontal surfaces: wall pictures stand upright as photo panels.
-          const valid = Boolean(pose && pose.transform.matrix[5] > 0.85);
+          const viewerPose = reference && frame.getViewerPose(reference);
+          candidate = null;
+          if (reference && viewerPose && session.visibilityState === "visible") {
+            const p = viewerPose.transform.position;
+            const viewerPosition = new T.Vector3(p.x, p.y, p.z);
+            for (const hit of frame.getHitTestResults(hitSource)) {
+              const pose = hit.getPose(reference);
+              if (!pose) continue;
+              candidate = placementFromHit(pose.transform.matrix, viewerPosition, wallArt, art.dimensions);
+              if (candidate) {
+                reticle.matrix.fromArray(pose.transform.matrix);
+                hitTime = performance.now();
+                break;
+              }
+            }
+          }
+          const valid = candidate !== null;
           reticle.visible = valid;
-          if (pose && valid) reticle.matrix.fromArray(pose.transform.matrix);
           if (valid !== surfaceFound) {
             surfaceFound = valid;
             setCanPlace(valid);
-            setXrMessage(
-              valid
-                ? "표면을 찾았어요. ‘여기에 놓기’를 눌러 배치하세요."
-                : "평평한 바닥이나 테이블을 다시 비춰주세요.",
-            );
+            if (valid) {
+              scanStarted = performance.now();
+              message(wallArt ? "세로 벽을 찾았어요. 표식에 작품의 중심을 맞춰 걸어보세요." : "표면을 찾았어요. ‘여기에 놓기’를 눌러 배치하세요.");
+            } else {
+              scanStarted = performance.now();
+              message(wallArt ? "벽을 다시 비춰주세요. 바닥에는 그림을 걸지 않아요." : "평평한 바닥이나 테이블을 다시 비춰주세요.");
+            }
+          } else if (!valid && performance.now() - scanStarted > 10000) {
+            message(wallArt
+              ? "벽을 아직 찾지 못했어요. 밝은 곳에서 무늬가 있는 벽을 비추며 천천히 움직여 주세요. 이 기기가 벽 인식을 지원하지 않으면 3D 공간 미리보기를 이용하세요."
+              : "표면을 아직 찾지 못했어요. 밝은 곳에서 바닥이나 테이블을 천천히 비춰주세요.");
           }
         }
         if (renderer.xr.isPresenting || (visible && !document.hidden)) {
@@ -640,7 +734,9 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
             {xrSupport === "checking"
               ? "카메라 AR 지원 여부를 확인하고 있어요."
               : xrSupport === "yes"
-                ? "지원 기기에서 카메라와 표면 인식 권한을 허용하면 등록 크기(100%)로 배치합니다. 벽 작품은 수평면에 세운 사진 패널로 표시됩니다."
+                ? wallArt
+                  ? "지원 기기에서 세로 벽을 인식하면 그림을 등록 크기(100%)로 걸어봅니다. 기기별 벽 인식과 실제 크기 정확도는 실기기 검증이 필요합니다."
+                  : "지원 기기에서 카메라와 표면 인식 권한을 허용하면 바닥·테이블에 등록 크기(100%)로 배치합니다."
                 : "현재 브라우저에서는 가상 공간 데모를 이용할 수 있어요. 카메라 AR은 WebXR을 지원하는 모바일 기기와 보안 연결(HTTPS)이 필요합니다."}
           </p>
           {error && ready && (
@@ -689,24 +785,39 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
               <p role="status">{xrMessage}</p>
               {wallArt && (
                 <small>
-                  벽 작품은 수평면 위에 세운 사진 패널로 표시됩니다.
+                  표식은 작품 중심입니다. 실측 치수와 설치 위치는 별도로 확인해 주세요.
                 </small>
               )}
             </div>
-            <div className="xr-actions">
-              <button
-                className="button dark"
-                disabled={!canPlace}
-                onClick={() => sceneApi.current?.place()}
-              >
-                <Box size={17} /> 여기에 놓기
-              </button>
-              <button
-                className="button secondary"
-                onClick={() => sceneApi.current?.endAR()}
-              >
-                <X size={17} /> AR 종료
-              </button>
+            <div className="xr-action-stack">
+              {wallArt && xrPlaced && (
+                <fieldset className="xr-adjustments" disabled={!canPlace}>
+                  <legend>벽 위에서 위치 조절 · 2cm씩</legend>
+                  <p>처음 배치한 중심 기준 · 좌우 {xrOffset.x}cm / 높이 {xrOffset.y}cm</p>
+                  <div>
+                    <button type="button" disabled={xrOffset.x <= -50} onClick={() => sceneApi.current?.adjustWall(-0.02, 0)}>← 왼쪽</button>
+                    <button type="button" disabled={xrOffset.y >= 50} onClick={() => sceneApi.current?.adjustWall(0, 0.02)}>↑ 위로</button>
+                    <button type="button" disabled={xrOffset.x >= 50} onClick={() => sceneApi.current?.adjustWall(0.02, 0)}>오른쪽 →</button>
+                    <button type="button" onClick={() => sceneApi.current?.resetWallOffset()}>조절 초기화</button>
+                    <button type="button" disabled={xrOffset.y <= -50} onClick={() => sceneApi.current?.adjustWall(0, -0.02)}>↓ 아래로</button>
+                  </div>
+                </fieldset>
+              )}
+              <div className="xr-actions">
+                <button
+                  className="button dark"
+                  disabled={!canPlace}
+                  onClick={() => sceneApi.current?.place()}
+                >
+                  <Box size={17} /> {xrPlaced ? "다시 배치" : wallArt ? "여기에 걸기" : "여기에 놓기"}
+                </button>
+                <button
+                  className="button secondary"
+                  onClick={() => sceneApi.current?.endAR()}
+                >
+                  <X size={17} /> AR 종료
+                </button>
+              </div>
             </div>
           </>
         )}
