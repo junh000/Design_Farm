@@ -12,6 +12,7 @@ import { fitToDimensions, disposeObject } from "../components/art-models.ts";
 
 test("an off-centre source model fits registered metre dimensions and rests on its footprint", () => {
   const source = new Group();
+  source.position.set(3, 5, -7);
   const mesh = new Mesh(new BoxGeometry(2, 3, 4), new MeshBasicMaterial());
   mesh.position.set(8, -4, 3);
   source.add(mesh);
@@ -33,4 +34,8 @@ test("an off-centre source model fits registered metre dimensions and rests on i
       1e-6,
   );
   disposeObject(fitted);
+});
+
+test("empty and flat imported models fail with a usable error", () => {
+  assert.throws(() => fitToDimensions(new Group(), 1, 1, 1), /모형/);
 });
