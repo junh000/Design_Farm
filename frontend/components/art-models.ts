@@ -206,10 +206,16 @@ export function fitToDimensions(
   const box = new T.Box3().setFromObject(group);
   const size = box.getSize(new T.Vector3());
   const center = box.getCenter(new T.Vector3());
+  if ([size.x, size.y, size.z, width, height, depth].some((v) => !Number.isFinite(v) || v <= 0)) {
+    disposeObject(group);
+    throw new Error("입체 모형의 가로·세로·깊이를 확인해 주세요.");
+  }
   // A wrapper keeps the object's origin at the centre of its footprint, on the floor.
-  group.position.set(-center.x, -box.min.y, -center.z);
+  const centered = new T.Group();
+  centered.add(group);
+  centered.position.set(-center.x, -box.min.y, -center.z);
   const wrapper = new T.Group();
-  wrapper.add(group);
+  wrapper.add(centered);
   wrapper.scale.set(width / size.x, height / size.y, depth / size.z);
   return wrapper;
 }
@@ -217,7 +223,14 @@ export function fitToDimensions(
 export async function createArtModel(art: Art) {
   const { width, height, depth } = art.dimensions;
   let group: T.Group;
-  if (art.id === "sculpture" || art.id === "bronze")
+  if (art.model_url) {
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const result = await new GLTFLoader().loadAsync(art.model_url);
+    group = result.scene;
+    group.traverse((object) => {
+      if (object instanceof T.Mesh) object.castShadow = object.receiveShadow = true;
+    });
+  } else if (art.id === "sculpture" || art.id === "bronze")
     group = createSculpture(art.id === "bronze");
   else if (art.id === "ceramic" || art.id === "porcelain")
     group = createVase(art.id === "porcelain");

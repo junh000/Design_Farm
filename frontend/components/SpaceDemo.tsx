@@ -330,7 +330,7 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
       } catch {
         if (!cancelled)
           throw new Error(
-            "작품 이미지를 불러오지 못했어요. 페이지를 새로고침해 주세요.",
+            "작품 사진 또는 3D 모형을 불러오지 못했어요. 파일과 연결 상태를 확인해 주세요.",
           );
       }
       if (cancelled) {
@@ -440,6 +440,7 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
   }, [
     art?.id,
     art?.image,
+    art?.model_url,
     art?.dimensions.width,
     art?.dimensions.height,
     art?.dimensions.depth,
@@ -532,7 +533,9 @@ export default function SpaceDemo({ artworks }: { artworks: Art[] }) {
             <small>cm</small>
           </div>
           <p className="model-note">
-            {modelIds.has(art.id)
+            {art.model_url
+              ? "작가가 첨부한 3D 모형입니다. 등록한 가로·세로·깊이에 맞춰 표시합니다."
+              : modelIds.has(art.id)
               ? "작품 사진을 참고한 3D 재질·형태 스터디입니다. 실제 작품을 스캔한 모델은 아닙니다."
               : "등록 사진을 작품 크기의 패널로 배치합니다. 사진 속 배경과 프레임이 함께 표시됩니다."}
           </p>

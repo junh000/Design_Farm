@@ -1755,11 +1755,31 @@ function RegisterForm({
   user: User;
   onDone: () => Promise<void>;
 }) {
+  const [model, setModel] = useState<{ id: string; url: string; name: string } | null>(null);
+  const [modelUploading, setModelUploading] = useState(false);
   const [image, setImage] = useState<{ id: string; url: string } | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [uploading, setUploading] = useState(false),
     [category, setCategory] = useState("회화");
+  async function uploadModel(file: File | undefined) {
+    if (!file) return;
+    setModel(null);
+    setModelUploading(true);
+    setError("");
+    try {
+      const data = new FormData();
+      data.append("file", file);
+      const uploaded = await api<{ id: string; url: string }>("/model-uploads", {
+        method: "POST", body: data,
+      });
+      setModel({ ...uploaded, name: file.name });
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setModelUploading(false);
+    }
+  }
   async function upload(file: File | undefined) {
     if (!file) return;
     setUploading(true);
@@ -1781,6 +1801,7 @@ function RegisterForm({
   }
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (busy || uploading || modelUploading) return;
     if (!image) {
       setError("작품 이미지를 먼저 업로드해 주세요.");
       return;
@@ -1796,6 +1817,7 @@ function RegisterForm({
         body: JSON.stringify({
           ...v,
           image_id: image.id,
+          model_id: category === "디지털" ? null : model?.id || null,
           width: Number(v.width),
           height: Number(v.height),
           depth: Number(v.depth || 0),
@@ -1827,7 +1849,7 @@ function RegisterForm({
             type="file"
             accept="image/jpeg,image/png,image/webp"
             aria-label="작품 이미지 업로드"
-            disabled={uploading}
+            disabled={uploading || busy}
             onChange={(e) => upload(e.target.files?.[0])}
           />
           <span className="button secondary">
@@ -1852,6 +1874,22 @@ function RegisterForm({
         </div>
       </div>
       <div className="form-stack">
+        {category !== "디지털" && (
+          <div className="form-stack">
+            <label>
+              3D 파일 첨부 (선택)
+              <input type="file" accept=".glb" aria-label="3D 파일 첨부"
+                disabled={modelUploading || busy}
+                onChange={(e) => { void uploadModel(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+            <p className="fine-print">텍스처를 포함한 비압축 GLB · 최대 20MB · 가로·세로·깊이를 cm로 입력해 주세요.</p>
+            {modelUploading && <p role="status">3D 파일 확인 중…</p>}
+            {model && <div className="inline-message">
+              <span>{model.name}</span>
+              <button type="button" className="text-link" disabled={busy} onClick={() => setModel(null)}>첨부 해제</button>
+            </div>}
+          </div>
+        )}
         <div className="form-section">
           <span>01</span>
           <h2>작품의 이야기</h2>
@@ -1933,7 +1971,7 @@ function RegisterForm({
             <input
               name="depth"
               type="number"
-              min="0"
+              min={model && category !== "디지털" ? "0.01" : "0"}
               max="10000"
               step=".01"
               defaultValue="0"
@@ -2017,7 +2055,7 @@ function RegisterForm({
             {error}
           </p>
         )}
-        <button className="button dark full" disabled={busy || uploading}>
+        <button className="button dark full" disabled={busy || uploading || modelUploading}>
           {busy ? "등록 중…" : "작품 등록하고 전시 시작하기"}
           <ArrowUpRight size={18} />
         </button>

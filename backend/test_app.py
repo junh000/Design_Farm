@@ -1,5 +1,7 @@
 """Integration tests use isolated temporary storage, never the local gallery data."""
 import io
+import json
+import struct
 import tempfile
 import unittest
 import uuid
@@ -11,7 +13,66 @@ from PIL import Image
 import app
 
 
+def model_bytes(external=False):
+    vertices = struct.pack('<12f', 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+    document = {
+        'asset': {'version': '2.0'},
+        'buffers': [{'byteLength': len(vertices)}],
+        'bufferViews': [{'buffer': 0, 'byteLength': len(vertices)}],
+        'accessors': [{'bufferView': 0, 'componentType': 5126, 'count': 4, 'type': 'VEC3',
+                       'min': [0, 0, 0], 'max': [1, 1, 1]}],
+        'meshes': [{'primitives': [{'attributes': {'POSITION': 0}, 'mode': 5}]}],
+        'nodes': [{'mesh': 0}], 'scenes': [{'nodes': [0]}], 'scene': 0,
+    }
+    if external:
+        document['buffers'][0]['uri'] = 'https://example.com/private.bin'
+    data = json.dumps(document).encode()
+    data += b' ' * (-len(data) % 4)
+    return (struct.pack('<4sII', b'glTF', 2, 28 + len(data) + len(vertices))
+            + struct.pack('<II', len(data), 0x4E4F534A) + data
+            + struct.pack('<II', len(vertices), 0x004E4942) + vertices)
+
+
 class GalleryTests(unittest.TestCase):
+    def test_model_upload_is_private_until_published_and_owner_only(self):
+        artist, _ = self.signup()
+        other, _ = self.signup('other@example.test')
+        before = len(other.get('/api/gallery').json()['artworks'])
+        raw = model_bytes()
+        result = artist.post('/api/model-uploads', files={'file': ('work.glb', raw, 'model/gltf-binary')})
+        self.assertEqual(result.status_code, 200, result.text)
+        model = result.json()
+        self.assertEqual(artist.get(model['url']).content, raw)
+        self.assertEqual(other.get(model['url']).status_code, 404)
+        self.assertEqual(len(other.get('/api/gallery').json()['artworks']), before)
+        payload = {'title': '조형', 'category': '조소', 'material': '석고', 'story': '시험 작품',
+                   'image_id': self.upload(other), 'model_id': model['id'], 'width': 20, 'height': 30,
+                   'depth': 10, 'space': '거실', 'placement': '탁자', 'mounting': 'surface',
+                   'start': 10000, 'duration': 3}
+        self.assertEqual(other.post('/api/artworks', json=payload).status_code, 422)
+        payload['image_id'] = self.upload(artist)
+        self.assertEqual(artist.post('/api/artworks', json={**payload, 'depth': 0}).status_code, 422)
+        result = artist.post('/api/artworks', json=payload)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(other.get(model['url']).content, raw)
+        self.assertEqual(self.client.get(model['url']).status_code, 200)
+        art = next(a for a in other.get('/api/gallery').json()['artworks'] if a['id'] == result.json()['id'])
+        self.assertEqual(art['model_url'], model['url'])
+        self.assertEqual(art['dimensions'], {'width': 20, 'height': 30, 'depth': 10, 'unit': 'cm'})
+        app.initialize()
+        self.assertEqual(other.get(model['url']).content, raw)
+
+    def test_invalid_model_uploads_are_rejected(self):
+        artist, _ = self.signup()
+        self.assertEqual(self.client.post('/api/model-uploads', files={'file': ('x.glb', model_bytes())}).status_code, 401)
+        for name, raw in [('x.txt', model_bytes()), ('x.glb', b'invalid'),
+                          ('x.glb', model_bytes()[:-4]), ('x.glb', model_bytes(True)),
+                          ('x.glb', b'x' * (app.MAX_MODEL_BYTES + 1))]:
+            with self.subTest(name=name, length=len(raw)):
+                result = artist.post('/api/model-uploads', files={'file': (name, raw)})
+                self.assertEqual(result.status_code, 422, result.text)
+        with app.database() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM model_uploads').fetchone()[0], 0)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         app.DATA=Path(self.temp.name)

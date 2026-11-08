@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from models import MAX_MODEL_BYTES, validate_glb
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('DESIGN_FARM_DATA', ROOT / 'data'))
@@ -104,6 +105,7 @@ def initialize():
           name TEXT NOT NULL, password TEXT NOT NULL, bio TEXT NOT NULL DEFAULT '', study TEXT NOT NULL DEFAULT '학생 작가 · 미인증');
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),expires INTEGER);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,owner_id TEXT REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS model_uploads(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS artworks(id TEXT PRIMARY KEY,artist_id TEXT NOT NULL REFERENCES users(id),
           title TEXT NOT NULL,category TEXT NOT NULL,material TEXT NOT NULL,story TEXT NOT NULL,
           image TEXT NOT NULL,width REAL NOT NULL,height REAL NOT NULL,depth REAL NOT NULL,
@@ -388,6 +390,7 @@ class Artwork(Input):
     material:str=Field(min_length=1,max_length=100)
     story:str=Field(min_length=1,max_length=500)
     image_id:str
+    model_id:str | None = None
     width:float=Field(gt=0,le=10000,allow_inf_nan=False)
     height:float=Field(gt=0,le=10000,allow_inf_nan=False)
     depth:float=Field(ge=0,le=10000,allow_inf_nan=False)
@@ -404,10 +407,18 @@ def create_art(body:Artwork,request:Request):
         u=current_user(request,c)
         if not c.execute('SELECT 1 FROM uploads WHERE id=? AND owner_id=?',(body.image_id,u['id'])).fetchone():
             raise HTTPException(422,'본인의 작품 사진을 업로드해 주세요.')
+        model_url = None
+        if body.model_id:
+            if body.category == '디지털' or body.depth <= 0:
+                raise HTTPException(422,'3D 모형은 실물 작품의 가로·세로·깊이(cm)가 모두 필요합니다.')
+            if not c.execute('SELECT 1 FROM model_uploads WHERE id=? AND owner_id=?',(body.model_id,u['id'])).fetchone():
+                raise HTTPException(422,'본인이 업로드한 3D 파일을 선택해 주세요.')
+            model_url = '/api/models/' + body.model_id
         ident=str(uuid.uuid4())
         c.execute('''INSERT INTO artworks(id,artist_id,title,category,material,story,image,width,height,depth,space,placement,mounting,start,ends,created)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (ident,u['id'],body.title,body.category,body.material,body.story,'/api/images/'+body.image_id,body.width,body.height,body.depth,body.space,body.placement,body.mounting,body.start,now_ms()+body.duration*86400000,now_ms()))
+        c.execute('UPDATE artworks SET model_url=? WHERE id=?', (model_url, ident))
     return {'id':ident}
 
 
@@ -447,6 +458,46 @@ def uploaded_image(ident:str,request:Request):
         if not public and not owned:
             raise HTTPException(404)
     return FileResponse(DATA/'uploads'/f'{ident}.jpg',media_type='image/jpeg')
+
+
+@app.post('/api/model-uploads')
+async def upload_model(request: Request, file: UploadFile):
+    with database() as c:
+        user = current_user(request, c)
+    filename = file.filename or ''
+    raw = await file.read(MAX_MODEL_BYTES + 1)
+    await file.close()
+    if len(raw) > MAX_MODEL_BYTES or not filename.lower().endswith('.glb'):
+        raise HTTPException(422, 'GLB 파일만 첨부할 수 있습니다. 최대 크기는 20MB입니다.')
+    try:
+        validate_glb(raw)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    ident = str(uuid.uuid4())
+    path = DATA / 'uploads' / f'{ident}.glb'
+    try:
+        path.write_bytes(raw)
+        with database(True) as c:
+            c.execute('INSERT INTO model_uploads VALUES(?,?)', (ident, user['id']))
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return {'id': ident, 'url': '/api/models/' + ident}
+
+
+@app.get('/api/models/{ident}')
+def uploaded_model(ident: str, request: Request):
+    try:
+        uuid.UUID(ident)
+    except ValueError:
+        raise HTTPException(404)
+    with database() as c:
+        user = current_user(request, c, False)
+        public = c.execute('SELECT 1 FROM artworks WHERE model_url=?', ('/api/models/' + ident,)).fetchone()
+        owned = user and c.execute('SELECT 1 FROM model_uploads WHERE id=? AND owner_id=?', (ident, user['id'])).fetchone()
+        if not public and not owned:
+            raise HTTPException(404)
+    return FileResponse(DATA / 'uploads' / f'{ident}.glb', media_type='model/gltf-binary')
 
 
 class Inquiry(Input):
