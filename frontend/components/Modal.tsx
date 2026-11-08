@@ -52,7 +52,7 @@ export default function Modal({
     >
       <div className="modal-bar">
         <span id={id}>{title}</span>
-        <button className="icon-button" onClick={onClose} aria-label="닫기">
+        <button type="button" className="icon-button" onClick={onClose} aria-label="닫기">
           <X size={21} />
         </button>
       </div>

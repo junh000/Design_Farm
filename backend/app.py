@@ -106,6 +106,8 @@ def initialize():
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),expires INTEGER);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,owner_id TEXT REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS model_uploads(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS registrations(user_id TEXT REFERENCES users(id), request_key TEXT,
+          payload TEXT NOT NULL, artwork_id TEXT REFERENCES artworks(id), PRIMARY KEY(user_id,request_key));
         CREATE TABLE IF NOT EXISTS artworks(id TEXT PRIMARY KEY,artist_id TEXT NOT NULL REFERENCES users(id),
           title TEXT NOT NULL,category TEXT NOT NULL,material TEXT NOT NULL,story TEXT NOT NULL,
           image TEXT NOT NULL,width REAL NOT NULL,height REAL NOT NULL,depth REAL NOT NULL,
@@ -391,6 +393,7 @@ class Artwork(Input):
     story:str=Field(min_length=1,max_length=500)
     image_id:str
     model_id:str | None = None
+    request_key:str | None = Field(default=None,min_length=16,max_length=100)
     width:float=Field(gt=0,le=10000,allow_inf_nan=False)
     height:float=Field(gt=0,le=10000,allow_inf_nan=False)
     depth:float=Field(ge=0,le=10000,allow_inf_nan=False)
@@ -405,6 +408,14 @@ class Artwork(Input):
 def create_art(body:Artwork,request:Request):
     with database(True) as c:
         u=current_user(request,c)
+        payload = body.model_dump_json()
+        if body.request_key:
+            previous = c.execute('SELECT * FROM registrations WHERE user_id=? AND request_key=?',
+                                 (u['id'], body.request_key)).fetchone()
+            if previous:
+                if previous['payload'] != payload:
+                    raise HTTPException(409, '동일한 등록 요청의 내용이 변경되었습니다.')
+                return {'id': previous['artwork_id']}
         if not c.execute('SELECT 1 FROM uploads WHERE id=? AND owner_id=?',(body.image_id,u['id'])).fetchone():
             raise HTTPException(422,'본인의 작품 사진을 업로드해 주세요.')
         model_url = None
@@ -419,6 +430,8 @@ def create_art(body:Artwork,request:Request):
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (ident,u['id'],body.title,body.category,body.material,body.story,'/api/images/'+body.image_id,body.width,body.height,body.depth,body.space,body.placement,body.mounting,body.start,now_ms()+body.duration*86400000,now_ms()))
         c.execute('UPDATE artworks SET model_url=? WHERE id=?', (model_url, ident))
+        if body.request_key:
+            c.execute('INSERT INTO registrations VALUES(?,?,?,?)', (u['id'], body.request_key, payload, ident))
     return {'id':ident}
 
 

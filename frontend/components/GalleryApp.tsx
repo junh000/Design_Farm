@@ -31,6 +31,7 @@ import Brand from "./Brand";
 import SpaceDemo from "./SpaceDemo";
 import Modal from "./Modal";
 import ArtworkImage from "./ArtworkImage";
+import ArtworkPreview, { type PreviewArt } from "./ArtworkPreview";
 import {
   api,
   Art,
@@ -1755,7 +1756,19 @@ function RegisterForm({
   user: User;
   onDone: () => Promise<void>;
 }) {
-  const [model, setModel] = useState<{ id: string; url: string; name: string } | null>(null);
+  const [preview, setPreview] = useState<{
+    art: PreviewArt;
+    body: string;
+    start: number;
+    duration: number;
+  } | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
+  const publishing = useRef(false);
+  const [model, setModel] = useState<{
+    id: string;
+    url: string;
+    name: string;
+  } | null>(null);
   const [modelUploading, setModelUploading] = useState(false);
   const [image, setImage] = useState<{ id: string; url: string } | null>(null),
     [error, setError] = useState(""),
@@ -1770,9 +1783,13 @@ function RegisterForm({
     try {
       const data = new FormData();
       data.append("file", file);
-      const uploaded = await api<{ id: string; url: string }>("/model-uploads", {
-        method: "POST", body: data,
-      });
+      const uploaded = await api<{ id: string; url: string }>(
+        "/model-uploads",
+        {
+          method: "POST",
+          body: data,
+        },
+      );
       setModel({ ...uploaded, name: file.name });
     } catch (e) {
       setError(errorMessage(e));
@@ -1806,29 +1823,60 @@ function RegisterForm({
       setError("작품 이미지를 먼저 업로드해 주세요.");
       return;
     }
-    setBusy(true);
     setError("");
     const f = new FormData(e.currentTarget),
       v = Object.fromEntries(f);
     delete v.agree;
+    const payload = {
+      ...v,
+      image_id: image.id,
+      model_id: category === "디지털" ? null : model?.id || null,
+      width: Number(v.width),
+      height: Number(v.height),
+      depth: Number(v.depth || 0),
+      start: Number(v.start),
+      duration: Number(v.duration),
+      request_key: crypto.randomUUID(),
+    };
+    setPreviewReady(!payload.model_id);
+    setPreview({
+      body: JSON.stringify(payload),
+      start: payload.start,
+      duration: payload.duration,
+      art: {
+        id: "draft",
+        title: String(v.title),
+        category,
+        material: String(v.material),
+        story: String(v.story),
+        space: String(v.space),
+        placement: String(v.placement),
+        image: image.url,
+        model_url: payload.model_id ? model!.url : null,
+        dimensions: {
+          width: payload.width,
+          height: payload.height,
+          depth: payload.depth,
+          unit: category === "디지털" ? "px" : "cm",
+        },
+      },
+    });
+  }
+  async function publish() {
+    if (!preview || !previewReady || publishing.current) return;
+    publishing.current = true;
+    setBusy(true);
+    setError("");
     try {
       await api("/artworks", {
         method: "POST",
-        body: JSON.stringify({
-          ...v,
-          image_id: image.id,
-          model_id: category === "디지털" ? null : model?.id || null,
-          width: Number(v.width),
-          height: Number(v.height),
-          depth: Number(v.depth || 0),
-          start: Number(v.start),
-          duration: Number(v.duration),
-        }),
+        body: preview.body,
       });
       await onDone();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      publishing.current = false;
       setBusy(false);
     }
   }
@@ -1878,16 +1926,35 @@ function RegisterForm({
           <div className="form-stack">
             <label>
               3D 파일 첨부 (선택)
-              <input type="file" accept=".glb" aria-label="3D 파일 첨부"
+              <input
+                type="file"
+                accept=".glb"
+                aria-label="3D 파일 첨부"
                 disabled={modelUploading || busy}
-                onChange={(e) => { void uploadModel(e.target.files?.[0]); e.target.value = ""; }} />
+                onChange={(e) => {
+                  void uploadModel(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
             </label>
-            <p className="fine-print">텍스처를 포함한 비압축 GLB · 최대 20MB · 가로·세로·깊이를 cm로 입력해 주세요.</p>
+            <p className="fine-print">
+              텍스처를 포함한 비압축 GLB · 최대 20MB · 가로·세로·깊이를 cm로
+              입력해 주세요.
+            </p>
             {modelUploading && <p role="status">3D 파일 확인 중…</p>}
-            {model && <div className="inline-message">
-              <span>{model.name}</span>
-              <button type="button" className="text-link" disabled={busy} onClick={() => setModel(null)}>첨부 해제</button>
-            </div>}
+            {model && (
+              <div className="inline-message">
+                <span>{model.name}</span>
+                <button
+                  type="button"
+                  className="text-link"
+                  disabled={busy}
+                  onClick={() => setModel(null)}
+                >
+                  첨부 해제
+                </button>
+              </div>
+            )}
           </div>
         )}
         <div className="form-section">
@@ -2055,11 +2122,64 @@ function RegisterForm({
             {error}
           </p>
         )}
-        <button className="button dark full" disabled={busy || uploading || modelUploading}>
-          {busy ? "등록 중…" : "작품 등록하고 전시 시작하기"}
+        <button
+          className="button dark full"
+          disabled={busy || uploading || modelUploading}
+        >
+          등록 전 미리보기
           <ArrowUpRight size={18} />
         </button>
       </div>
+      {preview && (
+        <Modal
+          title="공개 전 작품 확인"
+          wide
+          onClose={() => {
+            if (!publishing.current) {
+              setPreview(null);
+              setError("");
+            }
+          }}
+        >
+          <div className="registration-review">
+            <p className="fine-print">
+              아직 공개되지 않았어요. 사진·모형·치수와 작품 정보를 확인해
+              주세요.
+            </p>
+            <ArtworkPreview art={preview.art} onReady={setPreviewReady} />
+            <p>
+              경매 시작가 {money(preview.start)} · 공개 후 {preview.duration}
+              일간 진행
+            </p>
+            {error && (
+              <p className="error" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="preview-actions">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={busy}
+                onClick={() => {
+                  setPreview(null);
+                  setError("");
+                }}
+              >
+                수정하기
+              </button>
+              <button
+                type="button"
+                className="button dark"
+                disabled={busy || !previewReady}
+                onClick={publish}
+              >
+                {busy ? "등록 중…" : "작품 공개하고 경매 시작"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </form>
   );
 }
