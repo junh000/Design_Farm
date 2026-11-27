@@ -31,6 +31,7 @@ import Brand from "./Brand";
 import SpaceDemo from "./SpaceDemo";
 import Modal from "./Modal";
 import ArtworkImage from "./ArtworkImage";
+import ArtworkDescriptionFields from "./ArtworkDescriptionFields";
 import ArtworkPreview, { type PreviewArt } from "./ArtworkPreview";
 import PhotoModelPanel from "./PhotoModelPanel";
 import {
@@ -1969,7 +1970,7 @@ function RegisterForm({
         )}
         <div className="form-section">
           <span>01</span>
-          <h2>작품의 이야기</h2>
+          <h2>작품 정보와 설명</h2>
         </div>
         <p className="fine-print">
           작가: {user.name} · 로그인한 계정으로 등록됩니다.
@@ -2006,20 +2007,6 @@ function RegisterForm({
             />
           </label>
         </div>
-        <label>
-          작가 노트
-          <textarea
-            name="story"
-            required
-            maxLength={500}
-            rows={4}
-            placeholder="어떤 생각에서 시작된 작품인가요?"
-          />
-        </label>
-        <div className="form-section">
-          <span>02</span>
-          <h2>크기와 어울리는 공간</h2>
-        </div>
         <div className="dimension-fields">
           <label>
             가로 ({category === "디지털" ? "px" : "cm"})
@@ -2054,6 +2041,11 @@ function RegisterForm({
               defaultValue="0"
             />
           </label>
+        </div>
+        <ArtworkDescriptionFields />
+        <div className="form-section">
+          <span>02</span>
+          <h2>어울리는 공간</h2>
         </div>
         <div className="field-row">
           <label>

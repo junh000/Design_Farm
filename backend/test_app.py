@@ -1,13 +1,16 @@
 """Integration tests use isolated temporary storage, never the local gallery data."""
 import io
 import json
+import os
 import struct
 import tempfile
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
+import httpx
 from fastapi.testclient import TestClient
 from PIL import Image
 import app
@@ -34,6 +37,71 @@ def model_bytes(external=False):
 
 
 class GalleryTests(unittest.TestCase):
+    description_input = {'title': '겹의 시간', 'category': '공예', 'material': '백자토',
+                         'width': 20, 'height': 30, 'depth': 15, 'intent': '시간의 층을 표현했습니다.'}
+
+    def test_ai_description_sends_only_artwork_inputs_and_publishes_only_final_edit(self):
+        artist, _ = self.signup()
+        endpoint = '/api/artwork-descriptions'
+        draft = '백자토로 만든 「겹의 시간」은 시간의 층을 표현한 공예 작품입니다.'
+        upstream = {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
+                    'content': [{'type': 'output_text', 'text': draft}]}]}
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_API_KEY': 'test-key'}), \
+                patch('artwork_description.httpx.post', return_value=httpx.Response(
+                    200, json=upstream, request=httpx.Request('POST', 'https://api.openai.com/v1/responses'))) as provider:
+            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': True})
+            self.assertEqual(self.client.post(endpoint, json=self.description_input).status_code, 401)
+            self.assertEqual(artist.post(endpoint, headers={'X-Gallery-Request': '0'},
+                                         json=self.description_input).status_code, 403)
+            self.assertEqual(artist.post(endpoint, json={**self.description_input, 'email': 'private@example.test'}).status_code, 422)
+            self.assertEqual(artist.post(endpoint, json={**self.description_input, 'width': 0}).status_code, 422)
+            provider.assert_not_called()
+            before = len(self.client.get('/api/gallery').json()['artworks'])
+            result = artist.post(endpoint, json=self.description_input)
+            self.assertEqual(result.json(), {'description': draft})
+            self.assertEqual(len(self.client.get('/api/gallery').json()['artworks']), before)
+            provider.assert_called_once()
+            sent = provider.call_args.kwargs['json']
+            self.assertEqual(json.loads(sent['input']), {**self.description_input, 'unit': 'cm'})
+            self.assertIs(sent['store'], False)
+            self.assertIn('수상', sent['instructions'])
+            self.assertIn('전시 이력', sent['instructions'])
+
+        edited = '흙을 겹겹이 쌓아 시간의 층을 표현한 작품입니다.'
+        ident = self.artwork(artist, title='겹의 시간', story=edited)
+        published = next(a for a in self.client.get('/api/gallery').json()['artworks'] if a['id'] == ident)
+        self.assertEqual(published['story'], edited)
+
+    def test_ai_description_handles_disabled_provider_failure_and_usage_limits(self):
+        artist, _ = self.signup()
+        other, _ = self.signup('other@example.test')
+        endpoint = '/api/artwork-descriptions'
+        first = 1_800_014_400_000
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_API_KEY': ''}):
+            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': False})
+            self.assertEqual(artist.post(endpoint, json=self.description_input).status_code, 503)
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_API_KEY': 'test-key'}), \
+                patch('artwork_description.httpx.post', side_effect=httpx.ReadTimeout('secret upstream details')) as provider:
+            with patch('app.now_ms', return_value=first), app.database(True) as c:
+                c.execute('UPDATE sessions SET expires=?', (first + 86_400_000,))
+            with patch('app.now_ms', return_value=first):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    attempts = list(pool.map(lambda _: artist.post(endpoint, json=self.description_input), range(2)))
+                self.assertEqual(sorted(result.status_code for result in attempts), [429, 502])
+                failure = next(result for result in attempts if result.status_code == 502)
+                self.assertNotIn('secret upstream', failure.text)
+                self.assertEqual(other.post(endpoint, json=self.description_input).status_code, 502)
+            for offset in range(1, 5):
+                with patch('app.now_ms', return_value=first + offset * 20_000):
+                    self.assertEqual(artist.post(endpoint, json=self.description_input).status_code, 502)
+            with patch('app.now_ms', return_value=first + 5 * 20_000):
+                self.assertEqual(artist.post(endpoint, json=self.description_input).status_code, 429)
+                self.assertEqual(provider.call_count, 6)
+                with app.database(True) as c:
+                    c.execute('UPDATE artwork_description_usage SET attempts=100')
+                self.assertEqual(other.post(endpoint, json=self.description_input).status_code, 429)
+                self.assertEqual(provider.call_count, 6)
+
     def test_publication_retry_creates_one_artwork_and_preserves_request_content(self):
         artist, _ = self.signup()
         image = self.upload(artist)
