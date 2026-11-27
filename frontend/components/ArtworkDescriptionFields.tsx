@@ -19,7 +19,9 @@ function artworkInput(form: HTMLFormElement, intent: string) {
 }
 
 export default function ArtworkDescriptionFields() {
-  const [available, setAvailable] = useState<boolean | null>(null);
+  const [config, setConfig] = useState<{ enabled: boolean; provider: "gemini" | "openai" | null } | null>(null);
+  const available = config?.enabled ?? false;
+  const provider = config?.provider === "gemini" ? "Google Gemini" : "OpenAI";
   const [intent, setIntent] = useState("");
   const intentField = useRef<HTMLTextAreaElement>(null);
   const storyField = useRef<HTMLTextAreaElement>(null);
@@ -31,12 +33,12 @@ export default function ArtworkDescriptionFields() {
 
   useEffect(() => {
     const request = new AbortController();
-    void api<{ enabled: boolean }>("/artwork-descriptions/config", { signal: request.signal })
-      .then(({ enabled }) => {
-        if (!request.signal.aborted) setAvailable(enabled);
+    void api<NonNullable<typeof config>>("/artwork-descriptions/config", { signal: request.signal })
+      .then((descriptionConfig) => {
+        if (!request.signal.aborted) setConfig(descriptionConfig);
       })
       .catch(() => {
-        if (!request.signal.aborted) setAvailable(false);
+        if (!request.signal.aborted) setConfig({ enabled: false, provider: null });
       });
     return () => request.abort();
   }, []);
@@ -99,7 +101,7 @@ export default function ArtworkDescriptionFields() {
                 rows={3} maxLength={360} placeholder="예: 반복되는 선으로 늦여름의 고요함을 표현했어요." />
             </label>
             <p id="ai-description-note" className="fine-print">
-              생성할 때 작품명·분류·재료·치수·제작 의도를 OpenAI에 보냅니다. 입력란에 개인정보를 적지 마세요.
+              생성할 때 작품명·분류·재료·치수·제작 의도를 {provider}에 보냅니다. 입력란에 개인정보를 적지 마세요.
             </p>
             <button type="button" className="button secondary" disabled={busy} aria-describedby="ai-description-note"
               onClick={(event) => void generate(event.currentTarget.form)}>
@@ -108,7 +110,7 @@ export default function ArtworkDescriptionFields() {
           </>
         ) : (
           <p className="fine-print" role="status">
-            {available === null ? "AI 초안 기능을 확인하고 있어요." : "AI 초안은 준비 중이에요. 아래에 설명을 직접 작성할 수 있어요."}
+            {config === null ? "AI 초안 기능을 확인하고 있어요." : "AI 초안은 준비 중이에요. 아래에 설명을 직접 작성할 수 있어요."}
           </p>
         )}
         {busy && <p className="fine-print" role="status">초안을 기다리는 동안 설명을 직접 작성할 수 있어요.</p>}

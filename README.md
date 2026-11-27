@@ -71,6 +71,7 @@ pnpm dev
 - 생성 요청에는 작품 정보 텍스트만 포함합니다. 작품 사진과 계정 정보는 보내지 않습니다. 회화·조소·공예는 cm, 디지털은 px 단위를 전달합니다. 제작 의도에는 개인정보를 입력하지 마세요.
 - 백엔드 환경 변수 `DESIGN_FARM_DESCRIPTION_API_KEY`를 구성한 뒤 백엔드를 재시작하면 버튼이 활성화됩니다. 값을 구성하지 않거나 생성에 실패해도 설명을 직접 작성할 수 있습니다. API 키는 서버 환경에만 두고 저장소나 프런트엔드 환경 변수에 넣지 마세요.
 - [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)와 [GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini) 스냅샷 `gpt-4.1-mini-2025-04-14`를 사용합니다. 입력 750토큰·출력 250토큰으로 가정한 비용은 생성 1회당 약 **US$0.0007**입니다. 실제 사용량에 따라 달라지며 재생성도 별도 요청입니다. 출력은 최대 512토큰으로 제한합니다.
+- Gemini로 연결하려면 서버에 `DESIGN_FARM_DESCRIPTION_PROVIDER=gemini`와 `DESIGN_FARM_GEMINI_API_KEY`를 설정합니다. [Google AI Studio](https://aistudio.google.com/apikey)에서 생성에 사용할 프로젝트의 키를 발급하세요. [Gemini 3.1 Flash-Lite](https://aistudio.google.com/docs/models/gemini-3.1-flash-lite)와 [Interactions API](https://aistudio.google.com/docs/interactions-overview)를 사용합니다. 요금과 크레딧은 키를 발급한 프로젝트의 [Google 결제 설정](https://aistudio.google.com/docs/billing)에 따릅니다.
 - 로그인한 계정만 요청할 수 있습니다. 계정당 20초 간격, 한국시간 기준 하루 5회 및 서비스 전체 하루 100회까지 허용합니다.
 
 ## 기존 문제 수정

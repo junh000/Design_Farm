@@ -46,10 +46,11 @@ class GalleryTests(unittest.TestCase):
         draft = '백자토로 만든 「겹의 시간」은 시간의 층을 표현한 공예 작품입니다.'
         upstream = {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
                     'content': [{'type': 'output_text', 'text': draft}]}]}
-        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_API_KEY': 'test-key'}), \
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_PROVIDER': 'openai',
+                                     'DESIGN_FARM_DESCRIPTION_API_KEY': 'test-key'}), \
                 patch('artwork_description.httpx.post', return_value=httpx.Response(
                     200, json=upstream, request=httpx.Request('POST', 'https://api.openai.com/v1/responses'))) as provider:
-            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': True})
+            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': True, 'provider': 'openai'})
             self.assertEqual(self.client.post(endpoint, json=self.description_input).status_code, 401)
             self.assertEqual(artist.post(endpoint, headers={'X-Gallery-Request': '0'},
                                          json=self.description_input).status_code, 403)
@@ -77,10 +78,12 @@ class GalleryTests(unittest.TestCase):
         other, _ = self.signup('other@example.test')
         endpoint = '/api/artwork-descriptions'
         first = 1_800_014_400_000
-        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_API_KEY': ''}):
-            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': False})
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_PROVIDER': 'openai',
+                                     'DESIGN_FARM_DESCRIPTION_API_KEY': ''}):
+            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': False, 'provider': None})
             self.assertEqual(artist.post(endpoint, json=self.description_input).status_code, 503)
-        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_API_KEY': 'test-key'}), \
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_PROVIDER': 'openai',
+                                     'DESIGN_FARM_DESCRIPTION_API_KEY': 'test-key'}), \
                 patch('artwork_description.httpx.post', side_effect=httpx.ReadTimeout('secret upstream details')) as provider:
             with patch('app.now_ms', return_value=first), app.database(True) as c:
                 c.execute('UPDATE sessions SET expires=?', (first + 86_400_000,))
@@ -101,6 +104,29 @@ class GalleryTests(unittest.TestCase):
                     c.execute('UPDATE artwork_description_usage SET attempts=100')
                 self.assertEqual(other.post(endpoint, json=self.description_input).status_code, 429)
                 self.assertEqual(provider.call_count, 6)
+
+    def test_gemini_description_uses_selected_key_and_only_final_text(self):
+        artist, _ = self.signup()
+        endpoint = '/api/artwork-descriptions'
+        draft = '백자토를 겹겹이 쌓아 시간의 층을 표현했습니다.'
+        upstream = {'status': 'completed', 'steps': [
+            {'type': 'thought', 'content': [{'type': 'text', 'text': '내부 작업'}]},
+            {'type': 'model_output', 'content': [{'type': 'text', 'text': draft}]},
+        ]}
+        url = 'https://generativelanguage.googleapis.com/v1beta/interactions'
+        with patch.dict(os.environ, {'DESIGN_FARM_DESCRIPTION_PROVIDER': 'gemini',
+                                     'DESIGN_FARM_GEMINI_API_KEY': 'gemini-test',
+                                     'DESIGN_FARM_DESCRIPTION_API_KEY': 'unused-openai-key'}), \
+                patch('artwork_description.httpx.post', return_value=httpx.Response(
+                    200, json=upstream, request=httpx.Request('POST', url))) as provider:
+            self.assertEqual(artist.get(endpoint + '/config').json(), {'enabled': True, 'provider': 'gemini'})
+            self.assertEqual(artist.post(endpoint, json=self.description_input).json(), {'description': draft})
+            provider.assert_called_once()
+            self.assertEqual(provider.call_args.args, (url,))
+            self.assertEqual(provider.call_args.kwargs['headers'], {'x-goog-api-key': 'gemini-test'})
+            sent = provider.call_args.kwargs['json']
+            self.assertEqual(json.loads(sent['input']), {**self.description_input, 'unit': 'cm'})
+            self.assertIs(sent['store'], False)
 
     def test_publication_retry_creates_one_artwork_and_preserves_request_content(self):
         artist, _ = self.signup()

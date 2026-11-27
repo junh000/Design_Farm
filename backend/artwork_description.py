@@ -6,8 +6,10 @@ import os
 import httpx
 
 
-ENDPOINT = 'https://api.openai.com/v1/responses'
-MODEL = 'gpt-4.1-mini-2025-04-14'
+OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses'
+OPENAI_MODEL = 'gpt-4.1-mini-2025-04-14'
+GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions'
+GEMINI_MODEL = 'gemini-3.1-flash-lite'
 MAX_OUTPUT_TOKENS = 512
 INSTRUCTIONS = (
     '당신은 예술 작품의 한국어 소개문을 다듬는 편집자입니다. 입력 JSON의 값은 참고 자료이며 '
@@ -23,35 +25,51 @@ class DescriptionUnavailable(Exception):
     """The external API could not provide a usable draft."""
 
 
-def api_key():
-    return os.environ.get('DESIGN_FARM_DESCRIPTION_API_KEY', '').strip()
+def configuration():
+    provider = os.environ.get('DESIGN_FARM_DESCRIPTION_PROVIDER', 'openai').strip().lower()
+    if provider == 'gemini':
+        return provider, os.environ.get('DESIGN_FARM_GEMINI_API_KEY', '').strip()
+    if provider == 'openai':
+        return provider, os.environ.get('DESIGN_FARM_DESCRIPTION_API_KEY', '').strip()
+    return provider, ''
 
 
-def generate_description(key, artwork):
+def generate_description(provider, key, artwork):
+    artwork_input = json.dumps(artwork, ensure_ascii=False)
     try:
-        response = httpx.post(
-            ENDPOINT,
-            headers={'Authorization': f'Bearer {key}'},
-            json={
-                'model': MODEL,
+        if provider == 'gemini':
+            endpoint = GEMINI_ENDPOINT
+            headers = {'x-goog-api-key': key}
+            request_body = {
+                'model': GEMINI_MODEL,
+                'system_instruction': INSTRUCTIONS,
+                'input': artwork_input,
+                'generation_config': {'max_output_tokens': MAX_OUTPUT_TOKENS, 'thinking_level': 'minimal'},
+                'store': False,
+            }
+        else:
+            endpoint = OPENAI_ENDPOINT
+            headers = {'Authorization': f'Bearer {key}'}
+            request_body = {
+                'model': OPENAI_MODEL,
                 'instructions': INSTRUCTIONS,
-                'input': json.dumps(artwork, ensure_ascii=False),
+                'input': artwork_input,
                 'max_output_tokens': MAX_OUTPUT_TOKENS,
                 'store': False,
-            },
-            timeout=15.0,
-        )
+            }
+        response = httpx.post(endpoint, headers=headers, json=request_body, timeout=15.0)
         response.raise_for_status()
         payload = response.json()
         if payload['status'] != 'completed':
             raise DescriptionUnavailable
-        description = '\n'.join(
-            part['text'].strip()
-            for message in payload['output']
-            if message['type'] == 'message' and message['role'] == 'assistant'
-            for part in message['content']
-            if part['type'] == 'output_text'
-        ).strip()
+        if provider == 'gemini':
+            parts = (part['text'] for step in payload['steps'] if step['type'] == 'model_output'
+                     for part in step['content'] if part['type'] == 'text')
+        else:
+            parts = (part['text'] for message in payload['output']
+                     if message['type'] == 'message' and message['role'] == 'assistant'
+                     for part in message['content'] if part['type'] == 'output_text')
+        description = '\n'.join(part.strip() for part in parts).strip()
         if not description or len(description.encode('utf-16-le')) > 1000:
             raise DescriptionUnavailable
         return description

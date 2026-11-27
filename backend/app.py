@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from artwork_description import DescriptionUnavailable, api_key as description_key, generate_description
+from artwork_description import DescriptionUnavailable, configuration as description_configuration, generate_description
 from models import MAX_MODEL_BYTES, validate_glb
 from model_generation import GenerationService, configuration as generation_configuration, initialize_schema as initialize_generation_schema
 
@@ -499,12 +499,13 @@ class ArtworkDescription(Input):
 
 @app.get('/api/artwork-descriptions/config')
 def artwork_description_config():
-    return {'enabled': bool(description_key())}
+    provider, key = description_configuration()
+    return {'enabled': bool(key), 'provider': provider if key else None}
 
 
 @app.post('/api/artwork-descriptions')
 def create_artwork_description(body: ArtworkDescription, request: Request):
-    key = description_key()
+    provider, key = description_configuration()
     with database(True) as c:
         user_id = current_user(request, c)['id']
         if not key:
@@ -530,7 +531,7 @@ def create_artwork_description(body: ArtworkDescription, request: Request):
     if body.category == '디지털':
         del artwork['depth']
     try:
-        return {'description': generate_description(key, artwork)}
+        return {'description': generate_description(provider, key, artwork)}
     except DescriptionUnavailable:
         raise HTTPException(502, 'AI 초안을 가져오지 못했어요. 잠시 후 다시 시도하거나 직접 작성해 주세요.') from None
 
