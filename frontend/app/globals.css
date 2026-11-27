@@ -1996,6 +1996,29 @@ svg {
   grid-template-columns: repeat(3, 1fr);
   gap: 15px;
 }
+.artwork-description-assist,
+.artwork-description-draft {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+}
+.artwork-description-assist h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.artwork-description-assist .button {
+  justify-self: start;
+}
+.artwork-description-draft {
+  background: var(--paper);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
 .form-stack > .checkbox {
   display: flex;
   flex-direction: row;

@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from artwork_description import DescriptionUnavailable, configuration as description_configuration, generate_description
 from models import MAX_MODEL_BYTES, validate_glb
 from model_generation import GenerationService, configuration as generation_configuration, initialize_schema as initialize_generation_schema
 
@@ -107,6 +108,9 @@ def initialize():
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),expires INTEGER);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,owner_id TEXT REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS model_uploads(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS artwork_description_usage(day INTEGER NOT NULL,
+          user_id TEXT NOT NULL REFERENCES users(id), attempts INTEGER NOT NULL,
+          last_attempt INTEGER NOT NULL, PRIMARY KEY(day,user_id));
         CREATE TABLE IF NOT EXISTS registrations(user_id TEXT REFERENCES users(id), request_key TEXT,
           payload TEXT NOT NULL, artwork_id TEXT REFERENCES artworks(id), PRIMARY KEY(user_id,request_key));
         CREATE TABLE IF NOT EXISTS artworks(id TEXT PRIMARY KEY,artist_id TEXT NOT NULL REFERENCES users(id),
@@ -481,6 +485,55 @@ class Artwork(Input):
     mounting:Literal['wall','surface','floor']
     start:int=Field(strict=True,ge=1000,le=MAX_PRICE,multiple_of=1000)
     duration:Literal[1,3,7]
+
+
+class ArtworkDescription(Input):
+    title: str = Field(min_length=1, max_length=60)
+    category: Literal['회화', '조소', '공예', '디지털']
+    material: str = Field(min_length=1, max_length=100)
+    width: float = Field(gt=0, le=10000, allow_inf_nan=False)
+    height: float = Field(gt=0, le=10000, allow_inf_nan=False)
+    depth: float = Field(ge=0, le=10000, allow_inf_nan=False)
+    intent: str = Field(default='', max_length=360)
+
+
+@app.get('/api/artwork-descriptions/config')
+def artwork_description_config():
+    provider, key = description_configuration()
+    return {'enabled': bool(key), 'provider': provider if key else None}
+
+
+@app.post('/api/artwork-descriptions')
+def create_artwork_description(body: ArtworkDescription, request: Request):
+    provider, key = description_configuration()
+    with database(True) as c:
+        user_id = current_user(request, c)['id']
+        if not key:
+            raise HTTPException(503, 'AI 초안 생성은 준비 중이에요. 작품 설명은 직접 작성할 수 있어요.')
+        now = now_ms()
+        day = (now + 9 * 3_600_000) // 86_400_000  # KST day
+        recent = c.execute('''SELECT SUM(CASE WHEN day=? THEN attempts ELSE 0 END), MAX(last_attempt)
+                             FROM artwork_description_usage WHERE day IN (?,?) AND user_id=?''',
+                           (day, day, day - 1, user_id)).fetchone()
+        total = c.execute('SELECT COALESCE(SUM(attempts), 0) FROM artwork_description_usage WHERE day=?',
+                          (day,)).fetchone()[0]
+        if (recent[0] or 0) >= 5 or total >= 100:
+            raise HTTPException(429, '오늘 AI 초안 생성 한도에 도달했어요. 설명은 직접 작성할 수 있어요.')
+        if now - (recent[1] or 0) < 20_000:
+            raise HTTPException(429, '이전 요청으로부터 20초 뒤에 다시 시도해 주세요.')
+        c.execute('DELETE FROM artwork_description_usage WHERE day<?', (day - 1,))
+        c.execute('''INSERT INTO artwork_description_usage(day,user_id,attempts,last_attempt) VALUES (?,?,1,?)
+                     ON CONFLICT(day,user_id) DO UPDATE SET attempts=attempts+1, last_attempt=excluded.last_attempt''',
+                  (day, user_id, now))
+
+    artwork = body.model_dump()
+    artwork['unit'] = 'px' if body.category == '디지털' else 'cm'
+    if body.category == '디지털':
+        del artwork['depth']
+    try:
+        return {'description': generate_description(provider, key, artwork)}
+    except DescriptionUnavailable:
+        raise HTTPException(502, 'AI 초안을 가져오지 못했어요. 잠시 후 다시 시도하거나 직접 작성해 주세요.') from None
 
 
 @app.post('/api/artworks')
